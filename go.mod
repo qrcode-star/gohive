@@ -1,4 +1,4 @@
-module github.com/beltran/gohive
+module github.com/qrcode-star/gohive
 
 go 1.14
 
