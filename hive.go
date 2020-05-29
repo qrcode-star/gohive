@@ -22,7 +22,10 @@ import (
 
 const DEFAULT_FETCH_SIZE int64 = 1000
 const ZOOKEEPER_DEFAULT_NAMESPACE = "hiveserver2"
-
+type connection interface {
+	Cursor() *Cursor
+	Close() error
+}
 // Connection holds the information for getting a cursor to hive
 type Connection struct {
 	host                string
@@ -37,7 +40,39 @@ type Connection struct {
 	configuration       *ConnectConfiguration
 	transport           thrift.TTransport
 }
-
+// Cursor is used for fetching the rows after a query
+type cursor interface {
+	WaitForCompletion(ctx context.Context)
+	Exec(ctx context.Context, query string)
+	Execute(ctx context.Context, query string, async bool)
+	handleDoneContext()
+	executeAsync(ctx context.Context, query string)
+	Poll(getProgres bool) (status *hiveserver.TGetOperationStatusResp)
+	Finished() bool
+	fetchIfEmpty(ctx context.Context)
+	RowMap(ctx context.Context) map[string]interface{}
+	FetchOne(ctx context.Context, dests ...interface{})
+	Description() [][]string
+	HasMore(ctx context.Context) bool
+	Error() error
+	pollUntilData(ctx context.Context, n int) (err error)
+	Cancel()
+	Close()
+	resetState() error
+	parseResults(response *hiveserver.TFetchResultsResp) (err error)
+}
+type Cursor struct {
+	conn            *Connection
+	operationHandle *hiveserver.TOperationHandle
+	queue           []*hiveserver.TColumn
+	response        *hiveserver.TFetchResultsResp
+	columnIndex     int
+	totalRows       int
+	state           int
+	newData         bool
+	Err             error
+	description     [][]string
+}
 // ConnectConfiguration is the configuration for the connection
 // The fields have to be filled manually but not all of them are required
 // Depends on the auth and kind of connection.
@@ -335,19 +370,7 @@ const _CONTEXT_DONE = 3
 const _ERROR = 4
 const _ASYNC_ENDED = 5
 
-// Cursor is used for fetching the rows after a query
-type Cursor struct {
-	conn            *Connection
-	operationHandle *hiveserver.TOperationHandle
-	queue           []*hiveserver.TColumn
-	response        *hiveserver.TFetchResultsResp
-	columnIndex     int
-	totalRows       int
-	state           int
-	newData         bool
-	Err             error
-	description     [][]string
-}
+
 
 // WaitForCompletion waits for an async operation to finish
 func (c *Cursor) WaitForCompletion(ctx context.Context) {
@@ -956,7 +979,8 @@ func (c *Cursor) resetState() error {
 	c.state = _NONE
 	c.description = nil
 	c.newData = false
-	if c.operationHandle != nil {
+	c.operationHandle = nil
+	/*if c.operationHandle != nil {
 		closeRequest := hiveserver.NewTCloseOperationReq()
 		closeRequest.OperationHandle = c.operationHandle
 		// This context is ignored
@@ -969,7 +993,7 @@ func (c *Cursor) resetState() error {
 			return fmt.Errorf("Error closing the operation: %s", responseClose.Status.String())
 		}
 		return nil
-	}
+	}*/
 	return nil
 }
 
